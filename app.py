@@ -1,9 +1,13 @@
 import json
 import os
 from datetime import datetime
-from flask import Flask, request
+import smtplib
+from email.mime.text import MIMEText
+from email.header import Header
+from dotenv import load_dotenv
 
-app = Flask(__name__)
+#Load environnment variables from .env file
+load_dotenv()
 
 JSON_FILE_PATH = 'holidays.json' # Make sure this file is in the same directory
 
@@ -14,39 +18,64 @@ def load_holidays():
             data = json.load(f)
             return data
     except FileNotFoundError:
-        app.logger.error(f"Error: {JSON_FILE_PATH} not found.")
+        print(f"Error: {JSON_FILE_PATH} not found. Make sure it's in the same directory as the script.")
         return None
     except json.JSONDecodeError:
-        app.logger.error(f"Error: Could not decode JSON from {JSON_FILE_PATH}.")
+        print(f"Error: Could not decode JSON from {JSON_FILE_PATH}.")
         return None
     except Exception as e:
-        app.logger.error(f"An unexpected error occurred loading JSON: {e}")
+        print(f"An unexpected error occurred loading JSON: {e}")
         return None
 
-@app.route('/')
-def get_todays_holiday():
-    """
-    Endpoint to get the food holiday(s) for the current date as plain text.
-    Can also accept a 'date' query parameter in 'MM-DD' format for testing.
-    e.g., /?date=01-15
-    """
+def send_local_email(subject, body):
+    sender_email = os.environ.get('SENDER_EMAIL_ADDRESS')
+    sender_password = os.environ.get('SENDER_EMAIL_PASSWORD')
+    recipient_emails_str = os.environ.get('RECIPIENT_EMAILS')
+
+    if not all([sender_email, sender_password, recipient_emails_str]):
+        print("Error: Email credentials or recipients not set in environment variables. Cannot send email.")
+        print(f"SENDER_EMAIL_ADDRESS: {'SET' if sender_email else 'NOT SET'}")
+        print(f"SENDER_EMAIL_PASSWORD: {'SET' if sender_password else 'NOT SET'}")
+        print(f"RECIPIENT_EMAILS: {'SET' if recipient_emails_str else 'NOT SET'}")
+        return False
+
+    recipient_emails = [email.strip() for email in recipient_emails_str.split(',')]
+
+    smtp_server = 'smtp.gmail.com'
+    smtp_port = 587
+
+    try:
+        msg = MIMEText(body, 'plain', 'utf-8')
+        msg['From'] = Header(f"Food Holiday Bot <{sender_email}>", 'utf-8')
+        msg['To'] = Header(', '.join(recipient_emails), 'utf-8')
+        msg['Subject'] = Header(subject, 'utf-8')
+
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, recipient_emails, msg.as_string())
+        print(f"Email sent successfully to {', '.join(recipient_emails)}")
+        return True
+    except smtplib.SMTPAuthenticationError:
+        print("SMTP Authentication Error: Check your SENDER_EMAIL_ADDRESS and SENDER_EMAIL_PASSWORD (especially for App Passwords if using Gmail 2FA).")
+        return False
+    except smtplib.SMTPConnectError as e:
+        print(f"SMTP Connection Error: Could not connect to {smtp_server}:{smtp_port}. Check network or server availability. Error: {e}")
+        return False
+    except Exception as e:
+        print(f"An unexpected error occurred while sending email: {e}")
+        return False
+
+if __name__ == '__main__':
+    # This is the main logic that will run when the script is executed
     holidays = load_holidays()
     if holidays is None:
-        return "Could not load holiday data.", 500, {'Content-Type': 'text/plain; charset=utf-8'}
+        print("Aborting: Could not load holiday data.")
+        exit(1) # Exit with an error code
 
-    test_date_str = request.args.get('date')
     today = datetime.now().date()
-
-    if test_date_str:
-        try:
-            test_date = datetime.strptime(f"2024-{test_date_str}", "%Y-%m-%d").date()
-            current_month_day = test_date.strftime("%B %-d")
-            app.logger.info(f"Using provided date: {test_date_str} ({current_month_day})")
-        except ValueError:
-            return "Invalid date format. Please use MM-DD.", 400, {'Content-Type': 'text/plain; charset=utf-8'}
-    else:
-        current_month_day = today.strftime("%B %-d")
-        app.logger.info(f"Checking holidays for current date: {today} ({current_month_day})")
+    current_month_day = today.strftime("%B %-d")
+    print(f"Checking holidays for current date: {today} ({current_month_day})")
 
     todays_holidays = []
     for holiday in holidays:
@@ -57,9 +86,8 @@ def get_todays_holiday():
             if holiday_month_day == current_month_day:
                 todays_holidays.append(holiday.get('name', 'Unnamed Holiday'))
 
-    app.logger.info(f"Found {len(todays_holidays)} holidays for {current_month_day}.")
+    print(f"Found {len(todays_holidays)} holidays for {current_month_day}.")
 
-    # Format the output as plain text
     today_formatted = today.strftime("%B %d, %Y")
     if todays_holidays:
         holiday_list = "\n* ".join(todays_holidays)
@@ -67,7 +95,6 @@ def get_todays_holiday():
     else:
         output_message = f"Today's date is {today_formatted} and there are no specific food holidays listed for today."
 
-    return output_message, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+    email_subject = f"Daily Food Holiday Report for {today_formatted}"
+    send_local_email(email_subject, output_message)
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True)
