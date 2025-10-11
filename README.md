@@ -39,7 +39,7 @@ Branching Strategy
 Main Branch 
 CI/CD Pipeline
     • At this moment in time it isn't needed. 
-    • Will be required once I expound and advance the python applicatio
+    • Will be required once I expound and advance the python application
 
 
 5. 🔐 Security
